@@ -40,12 +40,15 @@ class HybridInferencePipeline:
     chunks and the contextual accuracy of WhisperModel for sequential chunks.
     """
 
-    def __init__(self, model_size_or_path: str, **kwargs):
+    def __init__(
+        self,
+        model,
+    ):
         """
         Initializes the HybridWhisperModel.
         """
-        self.whisper_model = WhisperModel(model_size_or_path, **kwargs)
-        self.logger = self.whisper_model.logger
+        self.model: WhisperModel = model
+        self.logger = self.model.logger
 
     def transcribe(
         self,
