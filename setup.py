@@ -30,14 +30,14 @@ conversion_requires = get_requirements(
 )
 
 setup(
-    name="faster-whisper",
+    name="faster-whisper-hybrid",
     version=get_project_version(),
     license="MIT",
-    description="Faster Whisper transcription with CTranslate2",
+    description="Faster Whisper transcription with CTranslate2, hybrid version",
     long_description=get_long_description(),
     long_description_content_type="text/markdown",
     author="Guillaume Klein",
-    url="https://github.com/SYSTRAN/faster-whisper",
+    url="https://github.com/YuBeomGon/faster-whisper",
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
