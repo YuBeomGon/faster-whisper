@@ -37,7 +37,7 @@ from faster_whisper.transcribe import download_model, format_timestamp, get_end,
 class HybridInferencePipeline:
     """
     A hybrid model that combines the speed of BatchedInferencePipeline for independent
-    chunks and the contextual accuracy of WhisperModel for sequential chunks.
+    chunks and the contextual accuracy of WhisperModel for sequential chunks. 
     """
 
     def __init__(
@@ -94,7 +94,7 @@ class HybridInferencePipeline:
         """
         Transcribes an audio file using a hybrid approach.
         """
-        sampling_rate = self.whisper_model.feature_extractor.sampling_rate
+        sampling_rate = self.model.feature_extractor.sampling_rate
 
         if not isinstance(audio, np.ndarray):
             audio = decode_audio(audio, sampling_rate=sampling_rate)
@@ -106,7 +106,7 @@ class HybridInferencePipeline:
 
         if not vad_filter:
             self.logger.warning("VAD filter is disabled. The model will process the audio sequentially.")
-            return self.whisper_model.transcribe(
+            return self.model.transcribe(
                 audio, language=language, task=task, log_progress=log_progress,
                 beam_size=beam_size, best_of=best_of, patience=patience, length_penalty=length_penalty,
                 repetition_penalty=repetition_penalty, no_repeat_ngram_size=no_repeat_ngram_size,
@@ -172,8 +172,8 @@ class HybridInferencePipeline:
         )
 
         tokenizer = Tokenizer(
-            self.whisper_model.hf_tokenizer,
-            self.whisper_model.model.is_multilingual,
+            self.model.hf_tokenizer,
+            self.model.model.is_multilingual,
             task=task,
             language=language,
         )
@@ -217,7 +217,7 @@ class HybridInferencePipeline:
                     current_initial_prompt = tokenizer.decode(all_segments[-1].tokens)
                 
                 # 순차 처리 시에는 원본 suppress_tokens를 전달
-                seq_segments, _ = self.whisper_model.transcribe(
+                seq_segments, _ = self.model.transcribe(
                     concatenated_audio, language=language, task=task, log_progress=False,
                     beam_size=beam_size, best_of=best_of, patience=patience, length_penalty=length_penalty,
                     repetition_penalty=repetition_penalty, no_repeat_ngram_size=no_repeat_ngram_size,
@@ -277,22 +277,22 @@ class HybridInferencePipeline:
         if not audio_chunks:
             return
 
-        features = [self.whisper_model.feature_extractor(chunk) for chunk in audio_chunks]
-        padded_features = np.stack([pad_or_trim(feature, self.whisper_model.feature_extractor.nb_max_frames) for feature in features])
+        features = [self.model.feature_extractor(chunk) for chunk in audio_chunks]
+        padded_features = np.stack([pad_or_trim(feature, self.model.feature_extractor.nb_max_frames) for feature in features])
         
         for i in range(0, len(padded_features), batch_size):
             batch_features = padded_features[i : i + batch_size]
             batch_metadata = chunks_metadata[i : i + batch_size]
             
-            encoder_output = self.whisper_model.encode(batch_features)
+            encoder_output = self.model.encode(batch_features)
             
-            results = self.whisper_model.model.generate(
+            results = self.model.model.generate(
                 encoder_output,
-                [self.whisper_model.get_prompt(tokenizer, [], without_timestamps=options.without_timestamps) for _ in range(len(batch_features))],
+                [self.model.get_prompt(tokenizer, [], without_timestamps=options.without_timestamps) for _ in range(len(batch_features))],
                 beam_size=options.beam_size, patience=options.patience,
                 length_penalty=options.length_penalty, repetition_penalty=options.repetition_penalty,
                 no_repeat_ngram_size=options.no_repeat_ngram_size, suppress_blank=options.suppress_blank,
-                suppress_tokens=options.suppress_tokens, max_length=self.whisper_model.max_length,
+                suppress_tokens=options.suppress_tokens, max_length=self.model.max_length,
                 return_scores=True, return_no_speech_prob=True,
             )
 
@@ -308,9 +308,9 @@ class HybridInferencePipeline:
                 current_metadata = batch_metadata[result_idx]
                 time_offset = current_metadata["start_time"] # start_time (초) 사용
                 segment_duration = current_metadata["end_time"] - current_metadata["start_time"]
-                seek_in_frames = int(time_offset * self.whisper_model.frames_per_second)
+                seek_in_frames = int(time_offset * self.model.frames_per_second)
 
-                subsegments, _, _ = self.whisper_model._split_segments_by_timestamps(
+                subsegments, _, _ = self.model._split_segments_by_timestamps(
                     tokenizer, tokens, time_offset, 
                     batch_features[result_idx].shape[-1], 
                     segment_duration,
@@ -322,7 +322,7 @@ class HybridInferencePipeline:
             
             if options.word_timestamps and any(batch_subsegments):
                 # add_word_timestamps는 segment의 리스트를 받으므로, 2차원 리스트를 전달
-                self.whisper_model.add_word_timestamps(
+                self.model.add_word_timestamps(
                     batch_subsegments, tokenizer, encoder_output,
                     [f.shape[-1] for f in batch_features],
                     options.prepend_punctuations, options.append_punctuations,
@@ -354,11 +354,11 @@ class HybridInferencePipeline:
         if language is not None:
             return language, 1.0, None
         
-        if not self.whisper_model.model.is_multilingual:
+        if not self.model.model.is_multilingual:
             return "en", 1.0, None
 
-        features = self.whisper_model.feature_extractor(audio_chunk)
-        lang, prob, all_probs = self.whisper_model.detect_language(features=features)
+        features = self.model.feature_extractor(audio_chunk)
+        lang, prob, all_probs = self.model.detect_language(features=features)
         self.logger.info(
             "Detected language '%s' with probability %.2f", lang, prob
         )
