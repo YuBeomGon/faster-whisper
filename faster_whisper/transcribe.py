@@ -1505,16 +1505,20 @@ class WhisperModel:
         hotwords: Optional[str] = None,
     ) -> List[int]:
         prompt = []
+        
+        # 최대 프롬프트 길이를 1/3로 제한 (약 149 토큰)
+        # 이렇게 하면 생성(generation)에 할당되는 토큰이 2/3 (약 299 토큰)로 늘어납니다.
+        max_prompt_part_length = self.max_length // 4         
 
         if previous_tokens or (hotwords and not prefix):
             prompt.append(tokenizer.sot_prev)
             if hotwords and not prefix:
                 hotwords_tokens = tokenizer.encode(" " + hotwords.strip())
-                if len(hotwords_tokens) >= self.max_length // 2:
-                    hotwords_tokens = hotwords_tokens[: self.max_length // 2 - 1]
+                if len(hotwords_tokens) >= max_prompt_part_length:
+                    hotwords_tokens = hotwords_tokens[:max_prompt_part_length - 1]
                 prompt.extend(hotwords_tokens)
             if previous_tokens:
-                prompt.extend(previous_tokens[-(self.max_length // 2 - 1) :])
+                prompt.extend(previous_tokens[-(max_prompt_part_length - 1) :])
 
         prompt.extend(tokenizer.sot_sequence)
 
@@ -1523,8 +1527,8 @@ class WhisperModel:
 
         if prefix:
             prefix_tokens = tokenizer.encode(" " + prefix.strip())
-            if len(prefix_tokens) >= self.max_length // 2:
-                prefix_tokens = prefix_tokens[: self.max_length // 2 - 1]
+            if len(prefix_tokens) >= max_prompt_part_length:
+                prefix_tokens = prefix_tokens[:max_prompt_part_length - 1]
             if not without_timestamps:
                 prompt.append(tokenizer.timestamp_begin)
             prompt.extend(prefix_tokens)
