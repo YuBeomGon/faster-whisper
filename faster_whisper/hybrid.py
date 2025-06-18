@@ -127,7 +127,7 @@ class HybridInferencePipeline:
             )
 
         if vad_parameters is None:
-            vad_parameters = VadOptions(max_speech_duration_s=chunk_length)
+            vad_parameters = VadOptions(max_speech_duration_s=chunk_length, min_silence_duration_ms=180)
         elif isinstance(vad_parameters, dict):
             vad_parameters.pop("max_speech_duration_s", None)
             vad_parameters = VadOptions(max_speech_duration_s=chunk_length, **vad_parameters)
@@ -166,10 +166,14 @@ class HybridInferencePipeline:
         independent_audio_chunks = []
         independent_chunks_metadata = []
         
-        first_chunk_audio, _ = collect_chunks(audio, [merged_chunks_info[0]])
-        language, language_probability, all_language_probs = self._detect_language(
-            language, first_chunk_audio[0]
-        )
+        if language is None:
+            first_chunk_audio, _ = collect_chunks(audio, [merged_chunks_info[0]])
+            language, language_probability, all_language_probs = self._detect_language(
+                language, first_chunk_audio[0]
+            )
+        else:
+            language_probability = 1.0
+            all_language_probs = None
 
         tokenizer = Tokenizer(
             self.model.hf_tokenizer,
@@ -200,7 +204,8 @@ class HybridInferencePipeline:
         )
         
         pbar = tqdm(total=len(merged_chunks_info), unit="chunks", disable=not log_progress)
-
+        
+        # print("processing_groups: ", processing_groups)
         for group in processing_groups:
             if group["type"] == "sequential":
                 self._process_independent_chunks(
