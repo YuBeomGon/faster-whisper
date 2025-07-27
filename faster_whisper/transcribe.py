@@ -7,7 +7,7 @@ import zlib
 from dataclasses import asdict, dataclass
 from inspect import signature
 from math import ceil
-from typing import BinaryIO, Iterable, List, Optional, Tuple, Union
+from typing import BinaryIO, Iterable, List, Optional, Tuple, Union, Dict
 from warnings import warn
 
 import ctranslate2
@@ -755,6 +755,7 @@ class WhisperModel:
         hotwords: Optional[str] = None,
         language_detection_threshold: Optional[float] = 0.5,
         language_detection_segments: int = 1,
+        correct_dict: Optional[Dict] = None,
     ) -> Tuple[Iterable[Segment], TranscriptionInfo]:
         """Transcribes an input file.
 
@@ -970,7 +971,7 @@ class WhisperModel:
         )
 
         segments = self.generate_segments(
-            features, tokenizer, options, log_progress, encoder_output
+            features, tokenizer, options, log_progress, encoder_output, correct_dict=correct_dict
         )
 
         if speech_chunks:
@@ -1074,6 +1075,7 @@ class WhisperModel:
         options: TranscriptionOptions,
         log_progress,
         encoder_output: Optional[ctranslate2.StorageView] = None,
+        correct_dict: Optional[Dict] = None,
     ) -> Iterable[Segment]:
         content_frames = features.shape[-1] - 1
         content_duration = float(content_frames * self.feature_extractor.time_per_frame)
@@ -1311,11 +1313,22 @@ class WhisperModel:
             for segment in current_segments:
                 tokens = segment["tokens"]
                 text = tokenizer.decode(tokens)
+                
+                corrected_text = text
+                if correct_dict:
+                    for wrong, right in correct_dict.items():
+                        corrected_text = corrected_text.replace(wrong, right)
 
                 if segment["start"] == segment["end"] or not text.strip():
                     continue
 
-                all_tokens.extend(tokens)
+                if corrected_text != text:
+                    # 텍스트가 수정되었으면, 다음 프롬프트에 영향을 주기 위해 재토큰화
+                    corrected_tokens = tokenizer.encode(corrected_text)
+                    all_tokens.extend(corrected_tokens)
+                else:
+                    # 수정되지 않았으면 기존 토큰 사용
+                    all_tokens.extend(tokens)
                 idx += 1
 
                 yield Segment(
@@ -1506,15 +1519,19 @@ class WhisperModel:
     ) -> List[int]:
         prompt = []
 
+        # 최대 프롬프트 길이를 1/3로 제한 (약 149 토큰)
+        # 이렇게 하면 생성(generation)에 할당되는 토큰이 2/3 (약 299 토큰)로 늘어납니다.
+        max_prompt_part_length = self.max_length // 3
+
         if previous_tokens or (hotwords and not prefix):
             prompt.append(tokenizer.sot_prev)
             if hotwords and not prefix:
                 hotwords_tokens = tokenizer.encode(" " + hotwords.strip())
-                if len(hotwords_tokens) >= self.max_length // 2:
-                    hotwords_tokens = hotwords_tokens[: self.max_length // 2 - 1]
+                if len(hotwords_tokens) >= max_prompt_part_length:
+                    hotwords_tokens = hotwords_tokens[:max_prompt_part_length - 1]
                 prompt.extend(hotwords_tokens)
             if previous_tokens:
-                prompt.extend(previous_tokens[-(self.max_length // 2 - 1) :])
+                prompt.extend(previous_tokens[-(max_prompt_part_length - 1) :])
 
         prompt.extend(tokenizer.sot_sequence)
 
@@ -1523,8 +1540,8 @@ class WhisperModel:
 
         if prefix:
             prefix_tokens = tokenizer.encode(" " + prefix.strip())
-            if len(prefix_tokens) >= self.max_length // 2:
-                prefix_tokens = prefix_tokens[: self.max_length // 2 - 1]
+            if len(prefix_tokens) >= max_prompt_part_length:
+                prefix_tokens = prefix_tokens[:max_prompt_part_length - 1]
             if not without_timestamps:
                 prompt.append(tokenizer.timestamp_begin)
             prompt.extend(prefix_tokens)
