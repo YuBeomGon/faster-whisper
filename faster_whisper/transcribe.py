@@ -1322,13 +1322,15 @@ class WhisperModel:
                 if segment["start"] == segment["end"] or not text.strip():
                     continue
 
-                if corrected_text != text:
-                    # 텍스트가 수정되었으면, 다음 프롬프트에 영향을 주기 위해 재토큰화
-                    corrected_tokens = tokenizer.encode(corrected_text)
-                    all_tokens.extend(corrected_tokens)
-                else:
-                    # 수정되지 않았으면 기존 토큰 사용
-                    all_tokens.extend(tokens)
+                corrected_tokens = tokenizer.encode(corrected_text)
+                all_tokens.extend(corrected_tokens)
+#                if corrected_text != text:
+#                    # 텍스트가 수정되었으면, 다음 프롬프트에 영향을 주기 위해 재토큰화
+#                    corrected_tokens = tokenizer.encode(corrected_text)
+#                    all_tokens.extend(corrected_tokens)
+#                else:
+#                    # 수정되지 않았으면 기존 토큰 사용
+#                    all_tokens.extend(tokens)
                 idx += 1
 
                 yield Segment(
