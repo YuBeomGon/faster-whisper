@@ -1318,6 +1318,9 @@ class WhisperModel:
                 if correct_dict:
                     for wrong, right in correct_dict.items():
                         corrected_text = corrected_text.replace(wrong, right)
+                
+                # 디코딩 오류 문자() 제거        
+                corrected_text = corrected_text.replace("�", "")
 
                 if segment["start"] == segment["end"] or not text.strip():
                     continue
