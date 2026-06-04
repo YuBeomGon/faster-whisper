@@ -18,6 +18,10 @@ from tqdm import tqdm
 
 from faster_whisper.audio import decode_audio, pad_or_trim
 from faster_whisper.feature_extractor import FeatureExtractor
+from faster_whisper.phrase_bias import (
+    compile_phrase_bias_config,
+    to_ctranslate2_phrase_biases,
+)
 from faster_whisper.tokenizer import _LANGUAGE_CODES, Tokenizer
 from faster_whisper.utils import download_model, format_timestamp, get_end, get_logger
 from faster_whisper.vad import (
@@ -617,6 +621,22 @@ class BatchedInferencePipeline:
         self.last_speech_timestamp = 0.0
 
 
+def _fallback_tokenizer_name(model_size_or_path: str) -> str:
+    name = str(model_size_or_path).lower()
+    if name.endswith(".en") or name.endswith("-en"):
+        return "openai/whisper-tiny.en"
+    return "openai/whisper-tiny"
+
+
+def _load_hf_tokenizer(model_path, tokenizer_bytes, model_size_or_path):
+    tokenizer_file = os.path.join(model_path, "tokenizer.json")
+    if tokenizer_bytes:
+        return tokenizers.Tokenizer.from_buffer(tokenizer_bytes)
+    if os.path.isfile(tokenizer_file):
+        return tokenizers.Tokenizer.from_file(tokenizer_file)
+    return tokenizers.Tokenizer.from_pretrained(_fallback_tokenizer_name(model_size_or_path))
+
+
 class WhisperModel:
     def __init__(
         self,
@@ -631,6 +651,7 @@ class WhisperModel:
         files: dict = None,
         revision: Optional[str] = None,
         use_auth_token: Optional[Union[str, bool]] = None,
+        phrase_bias_config: Optional[Union[str, dict]] = None,
         **model_kwargs,
     ):
         """Initializes the Whisper model.
@@ -686,6 +707,31 @@ class WhisperModel:
                 use_auth_token=use_auth_token,
             )
 
+        if phrase_bias_config is not None and "phrase_biases" in model_kwargs:
+            raise ValueError("phrase_bias_config cannot be used with phrase_biases")
+
+        # Load the tokenizer before building the CT2 model so phrase bias keywords
+        # can be compiled to token ids and passed as a constructor argument.
+        self.hf_tokenizer = _load_hf_tokenizer(
+            model_path,
+            tokenizer_bytes,
+            model_size_or_path,
+        )
+
+        if phrase_bias_config is not None:
+            compiled_phrase_biases = compile_phrase_bias_config(
+                phrase_bias_config,
+                self.hf_tokenizer,
+            )
+            ct2_phrase_biases = to_ctranslate2_phrase_biases(compiled_phrase_biases)
+            if ct2_phrase_biases:
+                model_kwargs["phrase_biases"] = ct2_phrase_biases
+            self.phrase_bias_config = phrase_bias_config
+            self.compiled_phrase_biases = compiled_phrase_biases
+        else:
+            self.phrase_bias_config = None
+            self.compiled_phrase_biases = []
+
         self.model = ctranslate2.models.Whisper(
             model_path,
             device=device,
@@ -696,16 +742,6 @@ class WhisperModel:
             files=files,
             **model_kwargs,
         )
-
-        tokenizer_file = os.path.join(model_path, "tokenizer.json")
-        if tokenizer_bytes:
-            self.hf_tokenizer = tokenizers.Tokenizer.from_buffer(tokenizer_bytes)
-        elif os.path.isfile(tokenizer_file):
-            self.hf_tokenizer = tokenizers.Tokenizer.from_file(tokenizer_file)
-        else:
-            self.hf_tokenizer = tokenizers.Tokenizer.from_pretrained(
-                "openai/whisper-tiny" + ("" if self.model.is_multilingual else ".en")
-            )
         self.feat_kwargs = self._get_feature_kwargs(model_path, preprocessor_bytes)
         self.feature_extractor = FeatureExtractor(**self.feat_kwargs)
         self.input_stride = 2

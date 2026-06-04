@@ -170,3 +170,56 @@ def test_to_ctranslate2_phrase_biases_roundtrip():
         [10, 11, 12],
         [20, 11, 12],
     ]
+
+
+def test_whisper_model_init_passes_compiled_phrase_biases(monkeypatch, tmp_path):
+    from faster_whisper import transcribe
+    from faster_whisper.transcribe import WhisperModel
+
+    captured = {}
+
+    class FakeWhisper:
+        is_multilingual = False
+
+        def __init__(self, model_path, **kwargs):
+            captured["model_path"] = model_path
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(transcribe.ctranslate2.models, "Whisper", FakeWhisper)
+    monkeypatch.setattr(
+        transcribe, "_load_hf_tokenizer", lambda *args, **kwargs: FakeWhisperTokenizer()
+    )
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    WhisperModel(
+        str(model_dir),
+        device="cpu",
+        phrase_bias_config={
+            "version": 1,
+            "enabled": True,
+            "terms": [{"text": "트랜스포머", "bias": 0.6}],
+        },
+    )
+
+    assert "phrase_biases" in captured["kwargs"]
+    assert len(captured["kwargs"]["phrase_biases"]) == 1
+    assert [list(path.ids) for path in captured["kwargs"]["phrase_biases"][0].token_paths] == [
+        [10, 11, 12],
+        [20, 11, 12],
+    ]
+
+
+def test_phrase_bias_config_conflicts_with_raw_ct2_phrase_biases(tmp_path):
+    from faster_whisper.transcribe import WhisperModel
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    with pytest.raises(ValueError, match="phrase_bias_config cannot be used with phrase_biases"):
+        WhisperModel(
+            str(model_dir),
+            phrase_bias_config={"version": 1, "enabled": False, "terms": []},
+            phrase_biases=[],
+        )
