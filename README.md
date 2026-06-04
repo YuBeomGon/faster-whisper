@@ -240,6 +240,22 @@ Whisper special tokens, and passes token ids to CTranslate2. CT2 does not tokeni
 continuation tokens. `ramp` makes later continuation tokens stronger and should be validated
 with A/B tests because insertion risk is domain dependent.
 
+To evaluate recall, insertion, and latency, `benchmark/phrase_bias_ab.py` runs baseline vs
+biased transcription over a JSONL manifest:
+
+```json
+{"audio": "tests/data/hotwords.mp3", "terms": ["ComfyUI"], "expected_present": true}
+{"audio": "tests/data/jfk.flac", "terms": ["ComfyUI"], "expected_present": false}
+```
+
+```bash
+python benchmark/phrase_bias_ab.py \
+  --model tiny \
+  --manifest phrase_bias_manifest.jsonl \
+  --phrase-bias-config examples/phrase_bias_config.json \
+  --device cpu
+```
+
 ### Logging
 
 The library logging level can be configured like this:
