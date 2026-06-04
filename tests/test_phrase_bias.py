@@ -92,3 +92,81 @@ def test_compile_uniform_two_surface_paths():
         CompiledPhraseBiasPath(ids=[10, 11, 12], step_bias=0.3, min_prefix_len=1),
         CompiledPhraseBiasPath(ids=[20, 11, 12], step_bias=0.3, min_prefix_len=1),
     ]
+
+
+from faster_whisper.phrase_bias import to_ctranslate2_phrase_biases
+
+
+def test_compile_ramp_schedule_as_cumulative_min_prefix_paths():
+    compiled = compile_phrase_bias_config(
+        {
+            "version": 1,
+            "enabled": True,
+            "bias_schedule": "ramp",
+            "terms": [{"text": "Transformer", "bias": 0.6}],
+        },
+        FakeWhisperTokenizer(),
+    )
+
+    # step_bias is a computed float (cumulative ramp increment), so compare it
+    # with approx; ids/min_prefix_len are exact. (Plan used exact dataclass
+    # equality which is fragile for float arithmetic, e.g. 0.2 - 0.1.)
+    paths = compiled[0].token_paths
+    assert len(paths) >= 3
+    for index, path in enumerate(paths[:3], start=1):
+        assert path.ids == [30, 31, 32, 33]
+        assert path.min_prefix_len == index
+        assert path.step_bias == pytest.approx(0.1, abs=1e-9)
+
+
+def test_compile_skips_one_token_surfaces():
+    compiled = compile_phrase_bias_config(
+        {"version": 1, "enabled": True, "terms": [{"text": "짧음", "bias": 0.5}]},
+        FakeWhisperTokenizer(),
+    )
+
+    assert compiled == []
+
+
+def test_compile_strips_special_tokens_and_keeps_roundtrip():
+    compiled = compile_phrase_bias_config(
+        {"version": 1, "enabled": True, "terms": [{"text": "special", "bias": 0.5}]},
+        FakeWhisperTokenizer(),
+    )
+
+    assert compiled[0].token_paths == [
+        CompiledPhraseBiasPath(ids=[60, 62], step_bias=0.5, min_prefix_len=1),
+        CompiledPhraseBiasPath(ids=[61, 62], step_bias=0.5, min_prefix_len=1),
+    ]
+
+
+def test_enabled_false_compiles_empty():
+    compiled = compile_phrase_bias_config(
+        {"version": 1, "enabled": False, "terms": [{"text": "트랜스포머"}]},
+        FakeWhisperTokenizer(),
+    )
+
+    assert compiled == []
+
+
+def test_unknown_config_key_raises():
+    with pytest.raises(ValueError, match="Unknown phrase_bias_config keys"):
+        compile_phrase_bias_config(
+            {"version": 1, "terms": [], "typo": True},
+            FakeWhisperTokenizer(),
+        )
+
+
+def test_to_ctranslate2_phrase_biases_roundtrip():
+    compiled = compile_phrase_bias_config(
+        {"version": 1, "enabled": True, "terms": [{"text": "트랜스포머", "bias": 0.6}]},
+        FakeWhisperTokenizer(),
+    )
+
+    ct2_biases = to_ctranslate2_phrase_biases(compiled)
+
+    assert len(ct2_biases) == 1
+    assert [list(path.ids) for path in ct2_biases[0].token_paths] == [
+        [10, 11, 12],
+        [20, 11, 12],
+    ]
