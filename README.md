@@ -217,6 +217,29 @@ segments, _ = model.transcribe(
 ```
 Vad filter is enabled by default for batched transcription.
 
+### Phrase bias
+
+`phrase_bias_config` applies a positive continuation bias to domain terms during
+Whisper decoding. The config is compiled once when `WhisperModel` is initialized.
+It requires a CTranslate2 build that supports `ctranslate2.models.PhraseBias`.
+
+```python
+from faster_whisper import WhisperModel
+
+model = WhisperModel(
+    "large-v3",
+    phrase_bias_config="examples/phrase_bias_config.json",
+)
+```
+
+The JSON file contains user-facing strings and total logit bias values. faster-whisper
+tokenizes both `" term"` and `"term"` forms, validates exact tokenizer roundtrip, removes
+Whisper special tokens, and passes token ids to CTranslate2. CT2 does not tokenize strings.
+
+`bias_schedule` can be `uniform` or `ramp`. `uniform` splits the total bias evenly across
+continuation tokens. `ramp` makes later continuation tokens stronger and should be validated
+with A/B tests because insertion risk is domain dependent.
+
 ### Logging
 
 The library logging level can be configured like this:
