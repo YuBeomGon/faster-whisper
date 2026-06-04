@@ -223,3 +223,23 @@ def test_phrase_bias_config_conflicts_with_raw_ct2_phrase_biases(tmp_path):
             phrase_bias_config={"version": 1, "enabled": False, "terms": []},
             phrase_biases=[],
         )
+
+
+def test_actual_whisper_tokenizer_compiles_leading_and_non_leading_paths():
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel("tiny")
+    compiled = compile_phrase_bias_config(
+        {
+            "version": 1,
+            "enabled": True,
+            "terms": [{"text": "transformer", "bias": 0.5}],
+        },
+        model.hf_tokenizer,
+    )
+
+    assert len(compiled) == 1
+    decoded_paths = [model.hf_tokenizer.decode(path.ids) for path in compiled[0].token_paths]
+    assert " transformer" in decoded_paths
+    assert "transformer" in decoded_paths
+    assert all(len(path.ids) >= 2 for path in compiled[0].token_paths)
