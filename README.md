@@ -219,9 +219,11 @@ Vad filter is enabled by default for batched transcription.
 
 ### Phrase bias
 
-`phrase_bias_config` applies a positive continuation bias to domain terms during
-Whisper decoding. The config is compiled once when `WhisperModel` is initialized.
-It requires a CTranslate2 build that supports `ctranslate2.models.PhraseBias`.
+`phrase_bias_config` applies a signed continuation bias to domain terms during
+Whisper decoding. Positive values boost domain terms; negative values softly
+suppress common misrecognitions. The config is compiled once when `WhisperModel`
+is initialized. It requires a CTranslate2 build that supports
+`ctranslate2.models.PhraseBias`.
 
 ```python
 from faster_whisper import WhisperModel
@@ -235,10 +237,14 @@ model = WhisperModel(
 The JSON file contains user-facing strings and total logit bias values. faster-whisper
 tokenizes both `" term"` and `"term"` forms, validates exact tokenizer roundtrip, removes
 Whisper special tokens, and passes token ids to CTranslate2. CT2 does not tokenize strings.
+By default, each term uses `default_total_bias=5.0`, clamps term bias to
+`min_total_bias=-5.0` and `max_total_bias=5.0`, and clamps each compiled step to
+`[-max_step_bias,+max_step_bias]` with `max_step_bias=2.0`.
 
 `bias_schedule` can be `uniform` or `ramp`. `uniform` splits the total bias evenly across
-continuation tokens. `ramp` makes later continuation tokens stronger and should be validated
-with A/B tests because insertion risk is domain dependent.
+continuation tokens. `ramp` makes later continuation tokens stronger for positive bias and
+more suppressive for negative bias. Both should be validated with A/B tests because insertion
+and over-suppression risk are domain dependent.
 
 To evaluate recall, insertion, and latency, `benchmark/phrase_bias_ab.py` runs baseline vs
 biased transcription over a JSONL manifest:

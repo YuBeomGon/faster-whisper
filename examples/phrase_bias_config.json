@@ -1,18 +1,25 @@
 {
   "version": 1,
   "enabled": true,
-  "default_total_bias": 0.5,
+  "default_total_bias": 5.0,
+  "min_total_bias": -5.0,
+  "max_total_bias": 5.0,
+  "max_step_bias": 2.0,
   "bias_schedule": "uniform",
   "terms": [
     {
       "text": "ComfyUI",
-      "bias": 0.5,
+      "bias": 5.0,
       "aliases": ["Comfy UI"]
     },
     {
       "text": "트랜스포머",
-      "bias": 0.6,
+      "bias": 5.0,
       "schedule": "ramp"
+    },
+    {
+      "text": "트랜스포마",
+      "bias": -3.0
     }
   ]
 }

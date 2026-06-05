@@ -7,9 +7,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
+import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 import ctranslate2
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,15 +77,20 @@ def compile_phrase_bias_config(
     if not loaded or loaded.get("enabled", True) is False:
         return []
 
-    min_total_bias = float(loaded.get("min_total_bias", 0.1))
-    max_total_bias = float(loaded.get("max_total_bias", 1.5))
-    max_step_bias = float(loaded.get("max_step_bias", 0.5))
-    default_bias = float(loaded.get("default_total_bias", 0.5))
+    min_total_bias = _read_finite_float(loaded.get("min_total_bias", -5.0), "min_total_bias")
+    max_total_bias = _read_finite_float(loaded.get("max_total_bias", 5.0), "max_total_bias")
+    if min_total_bias > max_total_bias:
+        raise ValueError("min_total_bias must be <= max_total_bias")
+    max_step_bias = _read_nonnegative_float(loaded.get("max_step_bias", 2.0), "max_step_bias")
+    if max_step_bias <= 0:
+        raise ValueError("max_step_bias must be > 0")
+    default_bias = _read_finite_float(loaded.get("default_total_bias", 5.0), "default_total_bias")
     default_schedule = loaded.get("bias_schedule", "uniform")
-    default_min_prefix_len = int(loaded.get("min_prefix_len", 1))
+    default_min_prefix_len = _read_min_prefix_len(loaded.get("min_prefix_len", 1), "min_prefix_len")
 
     compiled: List[CompiledPhraseBias] = []
     seen_surfaces = set()
+    seen_token_paths = set()
     for term in loaded["terms"]:
         if not isinstance(term, dict):
             raise ValueError("Each phrase bias term must be an object")
@@ -89,23 +98,38 @@ def compile_phrase_bias_config(
         if unknown:
             raise ValueError("Unknown phrase bias term keys: %s" % sorted(unknown))
 
-        text = str(term.get("text", "")).strip()
+        text_value = term.get("text", "")
+        if not isinstance(text_value, str):
+            raise ValueError("Phrase bias term text must be a string")
+        text = text_value.strip()
         if not text:
             raise ValueError("Phrase bias term text must be non-empty")
 
         surfaces = [text]
-        for alias in term.get("aliases", []) or []:
-            alias_text = str(alias).strip()
+        aliases = term.get("aliases", [])
+        if aliases is None:
+            aliases = []
+        if not isinstance(aliases, list):
+            raise ValueError("Phrase bias term aliases must be a list")
+        for alias in aliases:
+            if not isinstance(alias, str):
+                raise ValueError("Phrase bias term aliases must contain strings")
+            alias_text = alias.strip()
             if alias_text:
                 surfaces.append(alias_text)
 
         total_bias = _clamp(
-            float(term.get("bias", default_bias)),
+            _read_finite_float(term.get("bias", default_bias), "bias"),
             min_total_bias,
             max_total_bias,
         )
         schedule = term.get("schedule", default_schedule)
-        min_prefix_len = int(term.get("min_prefix_len", default_min_prefix_len))
+        if not isinstance(schedule, str):
+            raise ValueError("Phrase bias schedule must be a string")
+        min_prefix_len = _read_min_prefix_len(
+            term.get("min_prefix_len", default_min_prefix_len),
+            "min_prefix_len",
+        )
 
         for surface in surfaces:
             if surface in seen_surfaces:
@@ -118,6 +142,7 @@ def compile_phrase_bias_config(
                 schedule,
                 max_step_bias,
                 min_prefix_len,
+                seen_token_paths,
             )
             if token_paths:
                 compiled.append(CompiledPhraseBias(surface=surface, token_paths=token_paths))
@@ -131,20 +156,50 @@ def _compile_surface(
     schedule: str,
     max_step_bias: float,
     min_prefix_len: int,
+    seen_token_paths: Optional[set] = None,
 ) -> List[CompiledPhraseBiasPath]:
     paths: List[CompiledPhraseBiasPath] = []
     seen_paths = set()
     for variant in (" " + surface, surface):
         ids = _encode_clean_ids(tokenizer, variant)
         if len(ids) < 2:
+            logger.warning(
+                "Dropped phrase bias variant %r for surface %r: too few tokens",
+                variant,
+                surface,
+            )
             continue
-        if tokenizer.decode(ids) != variant:
+        decoded = tokenizer.decode(ids)
+        if decoded != variant:
+            logger.warning(
+                "Dropped phrase bias variant %r for surface %r: roundtrip mismatch decoded %r",
+                variant,
+                surface,
+                decoded,
+            )
             continue
         key = tuple(ids)
         if key in seen_paths:
             continue
         seen_paths.add(key)
-        paths.extend(_expand_schedule(ids, total_bias, schedule, max_step_bias, min_prefix_len))
+        if seen_token_paths is not None and key in seen_token_paths:
+            logger.warning(
+                "Dropped phrase bias variant %r for surface %r: duplicate token path",
+                variant,
+                surface,
+            )
+            continue
+        expanded = _expand_schedule(ids, total_bias, schedule, max_step_bias, min_prefix_len)
+        if not expanded:
+            logger.warning(
+                "Dropped phrase bias variant %r for surface %r: min_prefix_len exceeds continuation count",
+                variant,
+                surface,
+            )
+            continue
+        if seen_token_paths is not None:
+            seen_token_paths.add(key)
+        paths.extend(expanded)
     return paths
 
 
@@ -164,9 +219,11 @@ def _expand_schedule(
     continuation_count = len(ids) - 1
     if continuation_count <= 0:
         return []
+    if min_prefix_len > continuation_count:
+        return []
 
     if schedule == "uniform":
-        step_bias = min(total_bias / continuation_count, max_step_bias)
+        step_bias = _clamp(total_bias / continuation_count, -max_step_bias, max_step_bias)
         return [
             CompiledPhraseBiasPath(
                 ids=list(ids),
@@ -178,7 +235,7 @@ def _expand_schedule(
     if schedule == "ramp":
         weight_sum = continuation_count * (continuation_count + 1) / 2
         deltas = [
-            min(total_bias * (i + 1) / weight_sum, max_step_bias)
+            _clamp(total_bias * (i + 1) / weight_sum, -max_step_bias, max_step_bias)
             for i in range(continuation_count)
         ]
         paths = []
@@ -186,7 +243,7 @@ def _expand_schedule(
         for index, delta in enumerate(deltas, start=1):
             increment = delta - previous
             previous = delta
-            if increment <= 0:
+            if increment == 0:
                 continue
             paths.append(
                 CompiledPhraseBiasPath(
@@ -202,6 +259,33 @@ def _expand_schedule(
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))
+
+
+def _read_nonnegative_float(value: Any, name: str) -> float:
+    number = _read_finite_float(value, name)
+    if number < 0:
+        raise ValueError("%s must be >= 0" % name)
+    return number
+
+
+def _read_finite_float(value: Any, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("%s must be a finite number" % name) from None
+    if not math.isfinite(number):
+        raise ValueError("%s must be a finite number" % name)
+    return number
+
+
+def _read_min_prefix_len(value: Any, name: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("%s must be an integer" % name) from None
+    if number < 1:
+        raise ValueError("%s must be >= 1" % name)
+    return number
 
 
 def to_ctranslate2_phrase_biases(

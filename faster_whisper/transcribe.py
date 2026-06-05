@@ -621,20 +621,59 @@ class BatchedInferencePipeline:
         self.last_speech_timestamp = 0.0
 
 
-def _fallback_tokenizer_name(model_size_or_path: str) -> str:
-    name = str(model_size_or_path).lower()
-    if name.endswith(".en") or name.endswith("-en"):
-        return "openai/whisper-tiny.en"
-    return "openai/whisper-tiny"
+def _infer_multilingual_from_ct2_vocabulary(model_path) -> Optional[bool]:
+    vocabulary_file = os.path.join(model_path, "vocabulary.json")
+    if not os.path.isfile(vocabulary_file):
+        return None
+    try:
+        with open(vocabulary_file, "r", encoding="utf-8") as file:
+            vocabulary = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(vocabulary, list):
+        return None
+    language_tokens = {"<|%s|>" % code for code in _LANGUAGE_CODES}
+    return any(token in language_tokens for token in vocabulary)
 
 
-def _load_hf_tokenizer(model_path, tokenizer_bytes, model_size_or_path):
+def _fallback_tokenizer_name(
+    model_size_or_path: str,
+    model_path: Optional[str] = None,
+    is_multilingual: Optional[bool] = None,
+) -> str:
+    if is_multilingual is None and model_path is not None:
+        is_multilingual = _infer_multilingual_from_ct2_vocabulary(model_path)
+    if is_multilingual is None:
+        name = str(model_size_or_path).lower()
+        is_multilingual = not (name.endswith(".en") or name.endswith("-en"))
+    return "openai/whisper-tiny" if is_multilingual else "openai/whisper-tiny.en"
+
+
+def _load_hf_tokenizer(
+    model_path,
+    tokenizer_bytes,
+    model_size_or_path,
+    is_multilingual: Optional[bool] = None,
+):
     tokenizer_file = os.path.join(model_path, "tokenizer.json")
     if tokenizer_bytes:
         return tokenizers.Tokenizer.from_buffer(tokenizer_bytes)
     if os.path.isfile(tokenizer_file):
         return tokenizers.Tokenizer.from_file(tokenizer_file)
-    return tokenizers.Tokenizer.from_pretrained(_fallback_tokenizer_name(model_size_or_path))
+    return tokenizers.Tokenizer.from_pretrained(
+        _fallback_tokenizer_name(model_size_or_path, model_path, is_multilingual)
+    )
+
+
+def _ensure_phrase_bias_supported():
+    if not all(
+        hasattr(ctranslate2.models, name)
+        for name in ("PhraseBias", "PhraseBiasPath")
+    ):
+        raise RuntimeError(
+            "This CTranslate2 build does not support phrase_bias_config. "
+            "Install the custom CTranslate2 phrase bias build."
+        )
 
 
 class WhisperModel:
@@ -710,15 +749,15 @@ class WhisperModel:
         if phrase_bias_config is not None and "phrase_biases" in model_kwargs:
             raise ValueError("phrase_bias_config cannot be used with phrase_biases")
 
-        # Load the tokenizer before building the CT2 model so phrase bias keywords
-        # can be compiled to token ids and passed as a constructor argument.
-        self.hf_tokenizer = _load_hf_tokenizer(
-            model_path,
-            tokenizer_bytes,
-            model_size_or_path,
-        )
-
         if phrase_bias_config is not None:
+            _ensure_phrase_bias_supported()
+            # Load the tokenizer before building the CT2 model so phrase bias keywords
+            # can be compiled to token ids and passed as a constructor argument.
+            self.hf_tokenizer = _load_hf_tokenizer(
+                model_path,
+                tokenizer_bytes,
+                model_size_or_path,
+            )
             compiled_phrase_biases = compile_phrase_bias_config(
                 phrase_bias_config,
                 self.hf_tokenizer,
@@ -742,6 +781,13 @@ class WhisperModel:
             files=files,
             **model_kwargs,
         )
+        if phrase_bias_config is None:
+            self.hf_tokenizer = _load_hf_tokenizer(
+                model_path,
+                tokenizer_bytes,
+                model_size_or_path,
+                is_multilingual=self.model.is_multilingual,
+            )
         self.feat_kwargs = self._get_feature_kwargs(model_path, preprocessor_bytes)
         self.feature_extractor = FeatureExtractor(**self.feat_kwargs)
         self.input_stride = 2
