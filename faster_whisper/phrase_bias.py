@@ -77,7 +77,7 @@ def compile_phrase_bias_config(
     if not loaded or loaded.get("enabled", True) is False:
         return []
 
-    min_total_bias = _read_finite_float(loaded.get("min_total_bias", -5.0), "min_total_bias")
+    min_total_bias = _read_finite_float(loaded.get("min_total_bias", 0.0), "min_total_bias")
     max_total_bias = _read_finite_float(loaded.get("max_total_bias", 5.0), "max_total_bias")
     if min_total_bias > max_total_bias:
         raise ValueError("min_total_bias must be <= max_total_bias")
@@ -223,7 +223,7 @@ def _expand_schedule(
         return []
 
     if schedule == "uniform":
-        step_bias = _clamp(total_bias / continuation_count, -max_step_bias, max_step_bias)
+        step_bias = min(total_bias / continuation_count, max_step_bias)
         return [
             CompiledPhraseBiasPath(
                 ids=list(ids),
@@ -235,7 +235,7 @@ def _expand_schedule(
     if schedule == "ramp":
         weight_sum = continuation_count * (continuation_count + 1) / 2
         deltas = [
-            _clamp(total_bias * (i + 1) / weight_sum, -max_step_bias, max_step_bias)
+            min(total_bias * (i + 1) / weight_sum, max_step_bias)
             for i in range(continuation_count)
         ]
         paths = []
@@ -243,7 +243,7 @@ def _expand_schedule(
         for index, delta in enumerate(deltas, start=1):
             increment = delta - previous
             previous = delta
-            if increment == 0:
+            if increment <= 0:
                 continue
             paths.append(
                 CompiledPhraseBiasPath(
